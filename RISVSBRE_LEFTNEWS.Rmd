@@ -1,0 +1,385 @@
+---
+title: "Breaking Points & The Hill's Rising"
+author: "Andrew Jaymes"
+output:
+  html_document:
+    df_print: paged
+  prettydoc::html_pretty:
+    theme: cayman
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE, message=FALSE}
+library(scales)
+library(lubridate)
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(reshape2)
+library(quanteda)
+library(quanteda.textplots)
+library(quanteda.textstats)
+library(ggtech)
+library(extrafont)
+library(topicmodels)
+
+
+# facebook layout
+download.file("http://social-fonts.com/assets/fonts/facebook-letter-faces/facebook-letter-faces.ttf", "/Library/Fonts/facebook-letter-faces.ttf", method="curl")
+font_import(pattern = 'facebook-letter-faces.ttf', prompt=FALSE)
+
+```
+
+## Breaking Points vs The Hill's Rising: and what to expect from each
+
+This project compares two different podcast to try and understand underlying themes of each. The data used in this project was collected from YouTube and includes observations of published videos from each channel. Performing statistical analysis on variables such as view count, like count, and comment count we were able to understand each shows reach, popularity and engagement. Using natural language processing on title and description variables, we were able to discover major themes of each show.
+
+### Introduction
+
+This project was inspired by a shift in the news media landscape. As mainstream news outlets continue to push polarizing messages; I noticed a group of podcasters stepping up as an alternative. Two shows I noticed in particular were; Breaking Points and Rising because both shows are premised on having hosts with different viewpoints that are able discuss topics on which they disagree about, in good faith. In this project we will explore data collected on these two channels to gauge their popularity and find out what messages they are pushing.   
+
+### Backgroud on each show
+
+The Hill's Rising was originally hosted by Krystal Ball and Sagaar Enjeti, but after their departure to start Breaking Points in 2021, it has been hosted by a rotation of commentators from Libertarian Robby Suave to Socialists Brianna Joy Grey, as well as Ryan Grim from the Guardian. The hosts tend to follow the tradition of being on opposing sides, and are willing to debate topics and share ideas with each other. 
+
+Krystal and Sagaar decided to break away from corporate media (The Hill Rising) and start Breaking Points as an independent media organization. Reasons for leaving were cited as more freedom to choose the topics they reported and they didn't want viewers to think they had alternative motives. Since its creation, Breaking Points has become one of the most popular political podcast on air. Competing against well established Democratic leaning podcast, Pod Save America and Republican leaning podcast, The Daily Wire.
+
+### The problem
+
+I believe the information I here from mainstream media is censored to fit the networks values, resulting in wide spread mis-information and dis-information. I don't want to be conspiratorial, but it seems as if they are trying to divide us by making us hate one another. Therefore, I need to find a better source for daily news. I believe I have found two possible alternatives, but I want to make sure I understand there coverage. In order to understand Breaking Points and Rising, I think it is important to know the following questions. 
+
+1. Do they provide daily news that touch on the topics I care about?
+2. What is their most popular and engaging content? and is it over covered? 
+3. What are the underlying themes of their content?
+
+### The data
+
+- **Data Sets**
+  - Rising - 551 observations (published videos)
+  - Breaking - 551 observations (published videos)
+  
+- **Variables**
+  - video_id : *character*, id for the published video
+  - publishedAt : *date*, date the video was published
+  - title : *characher*, title of the published video
+  - description : *character*, description of the published video
+  - viewCount : *integer*, the number of views the published has
+  - likeCount : *integer*, the number of likes the published video has
+  - commentCount : *integer*, the number of comments the published video has
+
+- **Created Variables**
+  - channel : *factor*, name of the channel who published the video
+  - likeRatio : *numeric*, percent of viewers that hit the like button of the video
+  - commentRatio : *numeric*, percent of viewers that posted in the comment section of the video
+
+
+```{r, include=FALSE}
+# Loading the data
+rising <- read.csv("/Users/andrewjaymes/Desktop/PORTFOILO/NLP - LEFT NEWS/Left Media DATA/thehill.csv")
+breaking <- read.csv("/Users/andrewjaymes/Desktop/PORTFOILO/NLP - LEFT NEWS/breakingpointsall.csv")
+
+```
+
+#### Data shaping
+
+```{r}
+
+# taking a sample, correcting variables, adding channel variable
+breaking <- breaking[sample(nrow(breaking), size=551), ]
+breaking <- breaking %>% mutate(video_id = id, publishedAt = publication_date, channel = "Breaking Points") %>% select(-url, -channel_id, -channel_title, -id, -publication_date) %>% select(X, video_id, publishedAt, title, description, viewCount, likeCount, commentCount, channel)
+
+# deleting first column, deleting favorite count, and creating channel variable
+rising <- rising %>% select(-X.1, -favoriteCount) %>% mutate(channel = "Rising") %>% filter(publishedAt > "2021-06-01")
+
+df <- rbind(breaking, rising)
+```
+
+#### Data cleaning
+
+```{r, warning=FALSE}
+# changing date variable from character to date and numeric
+# creating like ratio and comment ratio 
+clean_data <- function(df) {
+  df$publishedAt <- as_date(df$publishedAt)
+  df$viewCount <- as.numeric(df$viewCount)
+  df$likeCount <- as.numeric(df$likeCount)
+  df$commentCount <- as.numeric(df$commentCount)
+  df <- df %>% mutate(likeRatio = likeCount/viewCount, commentRatio = commentCount/viewCount)
+  return(df)
+}
+
+df <- clean_data(df)
+# cleaning character variables
+
+# clean titles 
+df$title <-gsub("&#39;s", "", df$title)
+df$title <-gsub("&quot;", "", df$title)
+df$title <-gsub("&#39;", "", df$title)
+df$title <-gsub("&quot;E30&quot;", "", df$title)
+df$title <-gsub("&amp;", "", df$title)
+# clean description
+df$description <-gsub("&#39;s", "", df$description)
+df$description <-gsub("&quot;", "", df$description)
+df$description <-gsub("&#39;", "", df$description)
+df$description <-gsub("&quot;E30&quot;", "", df$description)
+df$description <-gsub("&amp;", "", df$description)
+```
+
+#### Text Processing
+
+```{r}
+# text pre processing
+df_title_cor <- corpus(df, text_field = "title")
+df_title_cor_group <- corpus_group(df_title_cor, groups = channel)
+df_title_tok <- tokens(df_title_cor, remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE)
+df_title_dfm <- dfm(df_title_tok, tolower = TRUE)
+df_title_dfm <- df_title_dfm %>%
+  dfm_remove(stopwords("english")) %>%
+  dfm_remove(c("krystal", "saagar", "enjeti", "ball", "rising", "kim", "iversen", "robby", "batya", "ungar-sargon", "soave", "brianna","joy","gray", "briahna", "katie", "halper", "ryan", "grim", "emily", "breaking", "points", "jashinsky",  "breaking", "points", "become", "apple", "spotify", "listen", "show" ,"podcast" ,"check" ,"member" ,"watch", "premium" ,"hour", "early" ,"visit", "uncut" ,"merch", "weekday", "morning", "youtube", "substack", "kyle", "kulinski", "channel", "google:https://podcasts.google.com/feed/ahr0chm6ly9mzwvkcy5idxp6c3byb3v0lmnvbs8xnti5odiylnjzcw", "quick", "takes"))
+
+
+```
+
+### Explore the data
+
+First, lets understand how much content is produced by each show and what the range of topics covered by each show are to make sure they are suitable alternatives. 
+
+#### Publish frequency
+
+```{r, warning=FALSE}
+
+# checking publishing frequency
+publishing <- df %>% 
+  mutate(time = paste(month(publishedAt, label = TRUE), year(publishedAt), sep = " ")) %>%
+  group_by(channel = as.factor(channel)) %>%
+  count(time) 
+``` 
+ 
+```{r}
+# visualize publishing
+
+publishing %>%
+  ggplot(aes(x=factor(time, level = c( "Jun 2021","Jul 2021", "Aug 2021", "Sep 2021", "Oct 2021", "Nov 2021", "Dec 2021", "Jan 2022", "Feb 2022", "Mar 2022", "Apr 2022", "May 2022", "Jun 2022", "Jul 2022", "Aug 2022")), y=n, fill = channel))+
+  geom_col(position = "dodge", stat = "identity", fun= "mean")+
+  scale_fill_tech(theme = "facebook")+
+  labs(title = "Publishing Frequency", subtitle = "Number of videos published by month")+
+  ylab(label = "")+
+  xlab(label = "")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 270))
+```
+We can see that the data has observations of each channel uploading between 5 and 45 videos per month between June 2021 and February 2022. The real number of uploads is more than this since our data only contains a sample of all of the videos uploaded by each channel. After March 2022, the channels are closer to the 50 uploads per month. Indicating that our data has more observations from recent months. As well as a possible increase in content from both channels during the last six months. Anyway, with the data we have on average each show published an average of 36.7 videos, which is enough content to satisfiy my needs. 
+
+```{r}
+# checking the views
+views <- df %>%
+  mutate(time = paste(month(publishedAt, label = TRUE), year(publishedAt), sep = " ")) %>%
+  group_by(channel, time) %>%
+  summarise(views = sum(viewCount))
+
+# visualize the views
+views %>%
+  ggplot(aes(x=factor(time, level = c( "Jun 2021","Jul 2021", "Aug 2021", "Sep 2021", "Oct 2021", "Nov 2021", "Dec 2021", "Jan 2022", "Feb 2022", "Mar 2022", "Apr 2022", "May 2022", "Jun 2022", "Jul 2022", "Aug 2022")), y=views, fill = channel))+
+  geom_col(position = "dodge", stat = "identity")+
+  scale_y_continuous(labels = label_number(suffix = " M", scale = 1e-6))+
+  scale_fill_tech(theme = "facebook")+
+  labs(title = "Total Views", subtitle = "Number of views per month")+
+  ylab(label = "")+
+  xlab(label = "")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 270))
+  
+```
+
+Looking at the view counts on videos published over the same time period we see from July 2021 to January 2022 both channels had views between two million and four million, with Rising in the lead. However, we see in February 2022 Risings views drop below two million and continue to decline until April of 2022, hitting less than 1 million views. After February 2022 Breaking Points views consistently stayed above four million. 
+
+Many factors could have caused the steep drop off in Rising viewership after February 2022. One thought I had was Rising fans continued to watch after Krystal and Saager left, but were turned off by content that came out that time. Breaking Points viewership experienced a big boost in the beginning, a drop, and then stedy growth. 
+
+#### Wordplot of all video titles
+
+```{r, warning=FALSE}
+df_title_dfm %>%
+  dfm_group(groups = channel) %>%
+  textplot_wordcloud(df_title_dfm, comparison = TRUE, max_words = 75, min_count = 5, color = c("#3b5998", "#8b9dc3"))
+```
+
+In order to understand what topics each show covers we can look at a word cloud of the titles. Straight away I see topics that I am interested in; for example, the war in Ukraine, democrats and President Biden; a party I somewhat affiliate myself with, inflation, and Covid. However, I do see a lot of hot button words that might not be that interesting to me; such as "fauci" and "mar-a-lago" on the Rising side. I am glad to see the words "union" and "amazon" on the Breaking Points side, because mainstream media doesn't pay to much attention to the labor movement. 
+
+
+#### Popularity 
+
+```{r, warning=FALSE}
+# like ratio
+df %>% 
+  ggplot(aes(x=viewCount, y=likeRatio))+
+  geom_point(aes(color = channel))+
+  scale_x_continuous(labels = label_number(suffix = " M", scale = 1e-6))+
+  scale_y_continuous(labels = label_number(suffix =  " %", scale = 1e2)) +
+  scale_color_manual(values = c("#3b5998", "#8b9dc3"))+
+  labs(title = "Measuring Popularity Among Videos", subtitle = "Percentage of viewers who liked a video")+
+  ylab(label = "")+
+  xlab(label = "")+
+  theme_classic()
+
+# visualize popular titles (40% of viewers or more liked the video)
+popular_title_wc <- df_title_dfm %>%
+  dfm_wordstem() %>%
+  dfm_subset(likeRatio >=.04) %>%
+  dfm_group(groups = channel) %>%
+  textplot_wordcloud(min_count = 7, max_words = 100, comparison = TRUE, color = c("#3b5998", "#8b9dc3"))
+```
+
+#### Engagment 
+
+```{r, warning=FALSE}
+# comment ratio
+summary(df$commentRatio)
+df %>% group_by(channel) %>% summarise(med = median(commentRatio), mean = mean(commentRatio))
+df %>% 
+  ggplot(aes(x=viewCount, y=commentRatio))+
+  geom_point(aes(color = channel))+
+  scale_x_continuous(labels = label_number(suffix = " M", scale = 1e-6))+
+  scale_y_continuous(labels = label_number(suffix =  " %", scale = 1e2)) +
+  scale_color_manual(values = c("#3b5998", "#8b9dc3"))+
+  labs(title = "Measuring Engament Among Videos", subtitle = "Percentage of viewers who commented on a video")+
+  ylab(label = "")+
+  xlab(label = "")+
+  theme_classic()
+
+# visualize the most engaging titles (20% of viewer or more left a comment)
+engaging_title_wc <- df_title_dfm %>%
+  dfm_subset(commentRatio >= .02) %>%
+  dfm_group(groups = channel) %>%
+  textplot_wordcloud(min_count = 3, max_words = 100, comparison = TRUE, color = c("#3b5998", "#8b9dc3"))
+```
+
+## Topic Model
+
+Last, we will apply a structural topic model to the description text variable. Topic models are unsupervised methods of understanding and organizing text data. It is a great way to understand themes with in a set of documents. It assumes that every topic is a mixture of terms and gives each term weights of association to the chosen number of topics. The topics are underlying the structural data, or latent. Therefore, it is a good way to see individual documents and how they might relate to one another.    
+
+### Pre processing description text
+
+```{r}
+df_corp_descriptions <- corpus(df, text_field = "description")
+df_tok_descriptions <- tokens(df_corp_descriptions,
+                              remove_punct = TRUE, 
+                              remove_url = TRUE, 
+                              remove_symbols = TRUE, 
+                              remove_numbers = TRUE)
+
+df_dfm_descriptions <- dfm(df_tok_descriptions)
+df_dfm_descriptions <- df_dfm_descriptions %>%
+  dfm_remove(stopwords("english"))%>%
+  dfm_remove(c("krystal", "saagar", "enjeti", "ball", "rising", "kim", "iversen", "robby", "batya", "ungar-sargon", "soave", "brianna","joy","gray", "briahna", "katie", "halper", "ryan", "grim", "emily", "breaking", "points", "become", "apple", "spotify", "listen", "show" ,"podcast" ,"check" ,"member" ,"watch", "premium" ,"hour", "early" ,"visit", "uncut" ,"merch", "weekday", "morning", "youtube", "substack", "kyle", "kulinski", "channel", "jashinsky", "friends", "kyle's", "google:https://podcasts.google.com/feed/ahr0chm6ly9mzwvkcy5idxp6c3byb3v0lmnvbs8xnti5odiylnjzcw"))
+
+
+```
+
+### Structured Topic Models
+
+The model we will use is called STM, or structural topic model that is commonly used as a semi-automated approach to topic modeling. It allows users to incorporate covariates and metadata to their analysis, which means each document have a prior distribution over the documents. It is a mixed model, where the user defines k, the number of topics. 
+
+```{r, results='hide', warning=FALSE}
+library(stm)
+# subset the dfm's by channel
+desc_break_dfm <- df_dfm_descriptions %>%
+  dfm_subset(channel == "Breaking Points")
+desc_rising_dfm <- df_dfm_descriptions %>%
+  dfm_subset(channel == "Rising") 
+
+# pick the number of topics
+
+#df_corp_descriptions <- corpus_trim(df_corp_descriptions, min_ntoken = 1)
+#dfm_corp<- dfm(tokens(df_corp_descriptions))
+#corp <- readCorpus(dfm_corp, type = "dtm")
+#corp$documents <- corp$documents
+#metad_vars <- df[,c("channel")]
+
+#out <- prepDocuments(documents = corp$documents, 
+                     #vocab = corp$vocab, 
+                     #meta = metad_vars)
+#set.seed(123)
+#stm_search <- searchK(documents = out$documents, 
+                      #vocab= out$vocab,
+                      #K= 10:40,
+                      #init.type = "Spectral")
+#plot(stm_search$results$K)
+
+topic.count <- 40
+```
+
+```{r}
+# all descriptions model
+stm <- convert(df_dfm_descriptions, to="stm")
+stm_model <- stm(stm$documents, stm$vocab, K=topic.count, data = stm$meta, init.type = "Spectral")
+all_topics_plot <- data.frame(t(labelTopics(stm_model, n=10)$prob))
+
+# breaking points descriptions model
+stm_bp_desc <- convert(desc_break_dfm, to="stm")
+stm_bp_model <- stm(stm_bp_desc$documents, stm_bp_desc$vocab, K=topic.count, data = stm_bp_desc$meta, init.type = "Spectral")
+bp_topics_plot <- data.frame(t(labelTopics(stm_bp_model, n=10)$prob))
+
+# rising descriptions model
+stm_ris_desc <- convert(desc_rising_dfm, to= "stm")
+stm_ris_model <- stm(stm_ris_desc$documents, stm_ris_desc$vocab, K=topic.count, data = stm_ris_desc$meta, init.type = "Spectral")
+ris_topic_plot <- data.frame(t(labelTopics(stm_ris_model, n=10)$prob))
+```
+
+### Summary Plot
+
+```{r}
+# breaking points
+plot(stm_bp_model, type = "summary", text.cex = 0.5, main = "Breaking Points video descriptions")
+
+# rising
+plot(stm_ris_model, type = "summary", text.cex = 0.5, main = "Rising video descriptions")
+```
+After we ran our model, we can look at our results by plotting them. We see that topic 7 - criticize, covid-19, vaccine; in the Rising plot makes sense. We noticed those words as frequent words found within the most popular content on the channel. Topic 20 - Ukraine, war, invasion also makes sense as a topic the channel would discuss. We also see action words like "discusses", "reacts", and "explains" through out the topics. We believe this is a good sign that topics are being debated and hopefully multiple viewpoints are being heard. As the shows premise describes. It also confirms that the content produced by these shows is on topics I consider valuable information. 
+
+Looking through the topics in the Breaking Points plot, we notice topic 23 - Matt, Stoller, Taibbi; refers to two of out favorite authors, Matt Stoller and Matt Taibbi. We feel more inclined to watch this channel for the fact that they might have those authors as guest or talk about their books. We are also interested in topic 7 - amazon, look, american; and happy to see that it covered frequently. Found in 6% of the description documents. Again we see action words similar to the ones in the Rising plot, such as "responds", "interview", and "cover". Hopefully indicating real discussion of topics where multiple viewpoints are considered. 
+
+### Perspectives plot
+
+Now we can get a better understanding of each topic by comparing two in a perspective plot. A perspective plot shows how similiar two different topics are.  Lets start with Breaking Points topics 12 and 7, which together were found through 11% of the documents and contain terms topic 7 - "labor", "uninion" "amazon" and topic 12 - "political", "future", "means". We choose these to because our interest in topic 7 and generality of topic 12. We notice the words "economic" and "fight" in the middle and a blend between red and blue. This indicates that both topic refer to these terms. Looking at the next Breaking Points plot we see that the descriptions documents talk about Biden and Inflation in a few similair ways. Turning to the Rising plots, we notice that "Tucker Carlson" was found in one of the topics. We believe he represents a view point that is often left out of left wing media. We also see that the word "react" is associated with a few different topics such as schools, Covid, and the president. 
+
+```{r}
+
+# Breaking points covering Biden 
+plot(stm_bp_model, type = "perspectives", topics = c(12,7), main = "Breaking Points video descriptions")
+
+plot(stm_bp_model, type = "perspectives", topics = c(6,33), main = "Breaking Points video descriptions")
+# Rising 
+plot(stm_ris_model, type = "perspectives", topics = c(20,32), main = "Rising video descriptions")
+
+plot(stm_ris_model, type = "perspectives", topics = c(7,11), main = "Rising video descriptions")
+```
+### Word Cloud
+
+We can also look at word clouds for each topic. After looking through a few that interest me, I feel confident that our model worked. I also feel good about jumping in to these two alternative media stations. We feel confident that produce enough content to fill our needs. We think that the topics discussed in each show are relevant and interesting. We also have enough evidence of both shows acting in good faith to their premise.
+
+```{r}
+set.seed(831)
+cloud(stm_bp_model, topic = 31)
+cloud(stm_bp_model, topic = 23)
+cloud(stm_bp_model, topic = 7)
+
+cloud(stm_ris_model, topic = 10)
+cloud(stm_ris_model, topic = 7)
+cloud(stm_ris_model, topic = 36)
+```
+
+
+### Histogram
+
+```{r}
+# breaking points 
+plot(stm_bp_model, type = "hist", topics = c(20,32,7,11,5,18,20,36,9), main = "Breaking Points video descriptions")
+# rising 
+plot(stm_ris_model, type = "hist", topics =  c(25,23,8,26,10,15,16,29,9), main = "Rising video descriptions")
+```
+
+
+
